@@ -268,21 +268,21 @@ do
             local payload = buffer(offset, length)
             p2p_tree:add(neop2p.fields.payload, payload, tostring(payload))
 
-            -- if cmd == C_INV then
-            --     return neop2p_inv_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_ADDR then
-            --     return neop2p_addr_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_GET_DATA then
-            --     return neop2p_getdata_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_VERSION then
-            --     return neop2p_ver_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_GET_HEADERS then
-            --     return neop2p_getheaders_dissector(payload, pinfo, p2p_tree)
-            -- end
+            if cmd == C_INV then
+                return neop2p_inv_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_ADDR then
+                return neop2p_addr_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_GET_DATA then
+                return neop2p_getdata_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_VERSION then
+                return neop2p_ver_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_GET_HEADERS then
+                return neop2p_getheaders_dissector(payload, pinfo, p2p_tree)
+            end
             return true
         end
     
@@ -326,10 +326,5 @@ do
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
-        local list = DissectorTable.list()
-        for key, value in pairs(list) do
-            tw:append(key..value)
-            tw:append("\n")
-        end
         neo:register_heuristic("tcp", neo_detector)
     end
