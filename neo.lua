@@ -229,11 +229,10 @@ do
         neop2p.fields.payload = ProtoField.string("neop2p.payload", "PAYLOAD", base.ASCII)
 
         local function neop2p_dissector(buffer, pinfo, tree)
-            local desegment_offset = pinfo.desegment_offset or 0
             local L = buffer:len()
-            local magic = buffer(0, 4):le_uint64():tonumber()
+            local magic = buffer(0, 4):le_uint()
             local cmd = buffer(4, 12):stringz()
-            local length = buffer(16, 4):le_uint64():tonumber()
+            local length = buffer(16, 4):le_uint()
 
             local p2p_tree = tree:add(neop2p, buffer(0, L), "Neo P2P Protocol, "..NET_TYPE[magic])
             pinfo.cols.protocol:set("NEO")
@@ -250,24 +249,11 @@ do
             p2p_tree:add(neop2p.fields.checksum, buffer(offset, 4), buffer(offset, 4):le_uint64():tonumber())
             offset = offset + 4
 
-            if length == 0 then
-                return true
+            if length ~= 0 then
+                local payload = buffer(offset, length)
+                p2p_tree:add(neop2p.fields.payload, payload, tostring(payload))
+                offset = offset + length
             end
-
-            if L < length + 24 then
-                tw:append(cmd.."-lt\n")
-                tw:append("L:"..tostring(L))
-                tw:append("\n")
-                tw:append("length:"..tostring(length))
-                tw:append("\n")
-                pinfo.desegment_len = length + 24 - L
-                pinfo.desegment_offset = desegment_offset
-                return 
-            end
-            
-            local payload = buffer(offset, length)
-            p2p_tree:add(neop2p.fields.payload, payload, tostring(payload))
-
             -- if cmd == C_INV then
             --     return neop2p_inv_dissector(payload, pinfo, p2p_tree)
             -- end
@@ -283,7 +269,6 @@ do
             -- if cmd == C_GET_HEADERS then
             --     return neop2p_getheaders_dissector(payload, pinfo, p2p_tree)
             -- end
-            return true
         end
     
         local function neop2p_detector(buffer, pinfo, tree)
@@ -304,32 +289,34 @@ do
     ---------------------------------------------------------------------------------------------------
         local neo = Proto("NEOPROTOCOL", "Neo Protocol")
     
-        local f_pf_neo_ui32_net = ProtoField.uint32("neo.net", "net type", base.HEX, NET_TYPE)
-
-        neo.fields =  {
-            f_pf_neo_ui32_net
-        }
-    
-        local function neo_detector(buffer, pinfo, tree)
-            local L = buffer:len()
-            local magic = buffer(0, 4):le_uint()
-            if L < 24 then
-                 return false 
+        function neo.dissector(buffer, pinfo, tree)
+            local len = buffer:len()
+            local offset = 0
+            while 0 < len do
+                if len < 24 then
+                    pinfo.desegment_offset = offset
+                    pinfo.desegment_len = DESEGMENT_ONE_MORE_SEGMENT
+                    return
+                end
+                if not neop2p_detector(buffer(offset):tvb(), pinfo, tree) then 
+                    return 0 
+                end
+                local length = buffer(offset + 16, 4):le_uint() + 24
+                if len < length then
+                    tw:append(buffer(offset + 4, 12):stringz())
+                    tw:append("\n")
+                    local missing = length - len
+                    pinfo.desegment_offset = offset
+                    pinfo.desegment_len = missing
+                    return 
+                end
+                neop2p_dissector(buffer(offset, length), pinfo, tree)
+                return true
             end
-            if magic == M_MAINNET then if not neop2p_detector(buffer(0):tvb(), pinfo, tree) then return false end
-            elseif magic == M_TESTNET then if not neop2p_detector(buffer(0):tvb(), pinfo, tree) then return false end
-            elseif magic == M_PRIVNET then if not neop2p_detector(buffer(0):tvb(), pinfo, tree) then return false end
-            else return false end
-    
-            return neop2p_dissector(buffer, pinfo, tree)
+            return
         end
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
-        local list = DissectorTable.list()
-        for key, value in pairs(list) do
-            tw:append(key..value)
-            tw:append("\n")
-        end
-        neo:register_heuristic("tcp", neo_detector)
+        neo:register_heuristic("tcp", neo.dissector)
     end
