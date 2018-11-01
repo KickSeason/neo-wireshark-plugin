@@ -1,6 +1,5 @@
 --V0.0.1 2018-10-30
 do
-    tw = TextWindow.new("neo")
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
     M_MAINNET = 0x00746e41
@@ -236,7 +235,7 @@ do
 
             local p2p_tree = tree:add(neop2p, buffer(0, L), "Neo P2P Protocol, "..NET_TYPE[magic])
             pinfo.cols.protocol:set("NEO")
-            pinfo.cols.info:set("".. NET_TYPE[magic]..","..cmd)
+            pinfo.cols.info:set(" ".. NET_TYPE[magic]..":"..cmd)
     
             local offset = 0
 
@@ -248,38 +247,37 @@ do
             offset = offset + 4
             p2p_tree:add(neop2p.fields.checksum, buffer(offset, 4), buffer(offset, 4):le_uint64():tonumber())
             offset = offset + 4
-
-            if length ~= 0 then
-                local payload = buffer(offset, length)
-                p2p_tree:add(neop2p.fields.payload, payload, tostring(payload))
-                offset = offset + length
+            if length == 0 then
+                return true
             end
-            -- if cmd == C_INV then
-            --     return neop2p_inv_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_ADDR then
-            --     return neop2p_addr_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_GET_DATA then
-            --     return neop2p_getdata_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_VERSION then
-            --     return neop2p_ver_dissector(payload, pinfo, p2p_tree)
-            -- end
-            -- if cmd == C_GET_HEADERS then
-            --     return neop2p_getheaders_dissector(payload, pinfo, p2p_tree)
-            -- end
+            local payload = buffer(offset, length)
+            if cmd == C_INV then
+                return neop2p_inv_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_ADDR then
+                return neop2p_addr_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_GET_DATA then
+                return neop2p_getdata_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_VERSION then
+                return neop2p_ver_dissector(payload, pinfo, p2p_tree)
+            end
+            if cmd == C_GET_HEADERS then
+                return neop2p_getheaders_dissector(payload, pinfo, p2p_tree)
+            end
+            p2p_tree:add(neop2p.fields.payload, payload, tostring(payload))
+            offset = offset + length
+            return true
         end
     
         local function neop2p_detector(buffer, pinfo, tree)
-            local magic = buffer(0, 4):le_uint64():tonumber()
-            local cmd = buffer(4, 12):stringz()
-            local nettype = NET_TYPE[magic]
-            local cmdtype = CMD_TYPE[cmd]
-            if nettype == nil then 
+            local len = buffer:len()
+            if len < 4 then 
                 return false 
             end
-            if cmdtype == nil then
+            local magic = buffer(0, 4):le_uint64():tonumber()
+            if NET_TYPE[magic] == nil then 
                 return false 
             end
             return true
@@ -289,31 +287,42 @@ do
     ---------------------------------------------------------------------------------------------------
         local neo = Proto("NEOPROTOCOL", "Neo Protocol")
     
+        -- function neo.dissector(buffer, pinfo, tree)
+        --     local len = buffer:len()
+        --     local offset = 0
+        --     while 0 < len do
+        --         if len < 24 then
+        --             pinfo.desegment_offset = offset
+        --             pinfo.desegment_len = DESEGMENT_ONE_MORE_SEGMENT
+        --             return
+        --         end
+        --         if not neop2p_detector(buffer(offset):tvb(), pinfo, tree) then 
+        --             return 0 
+        --         end
+        --         local length = buffer(offset + 16, 4):le_uint() + 24
+        --         if len < length then
+        --             tw:append(buffer(offset + 4, 12):stringz())
+        --             tw:append("\n")
+        --             local missing = length - len
+        --             pinfo.desegment_offset = offset
+        --             pinfo.desegment_len = missing
+        --             return 
+        --         end
+        --         neop2p_dissector(buffer(offset, length), pinfo, tree)
+        --         len = len - length
+        --         offset = offset + length
+        --     end
+        --     return true
+        -- end
+        local function get_neop2p_len(buffer, pinfo, offset)
+            local len = buffer(offset + 16, 4):le_uint() + 24
+            return len
+        end
         function neo.dissector(buffer, pinfo, tree)
-            local len = buffer:len()
-            local offset = 0
-            while 0 < len do
-                if len < 24 then
-                    pinfo.desegment_offset = offset
-                    pinfo.desegment_len = DESEGMENT_ONE_MORE_SEGMENT
-                    return
-                end
-                if not neop2p_detector(buffer(offset):tvb(), pinfo, tree) then 
-                    return 0 
-                end
-                local length = buffer(offset + 16, 4):le_uint() + 24
-                if len < length then
-                    tw:append(buffer(offset + 4, 12):stringz())
-                    tw:append("\n")
-                    local missing = length - len
-                    pinfo.desegment_offset = offset
-                    pinfo.desegment_len = missing
-                    return 
-                end
-                neop2p_dissector(buffer(offset, length), pinfo, tree)
-                return true
+            if neop2p_detector(buffer, pinfo, tree) then
+                return dissect_tcp_pdus(buffer, tree, 24, get_neop2p_len, neop2p_dissector)
             end
-            return
+            return false
         end
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
