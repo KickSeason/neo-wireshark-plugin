@@ -50,6 +50,12 @@ do
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
+    local function dprint(...)
+        info(table.concat({"Lua: ", ...}, " "))
+    end
+    ---------------------------------------------------------------------------------------------------
+    ---------------------------------------------------------------------------------------------------
+    ---------------------------------------------------------------------------------------------------
     local neop2p_hashes = Proto("Hashes", "hashes")
     neop2p_hashes.fields.hash = ProtoField.string("hash", "HASH", base.ASCII)
     ---------------------------------------------------------------------------------------------------
@@ -270,59 +276,52 @@ do
             offset = offset + length
             return true
         end
-    
-        local function neop2p_detector(buffer, pinfo, tree)
-            local len = buffer:len()
-            if len < 4 then 
-                return false 
+        
+        local function neop2p_detector(buffer, pinfo, tree, offset)
+            local len = buffer:len() - offset
+            if len < 4 then
+                return 0 
             end
-            local magic = buffer(0, 4):le_uint64():tonumber()
+            local magic = buffer(offset, 4):le_uint()
             if NET_TYPE[magic] == nil then 
-                return false 
+                return 0 
             end
-            return true
+            if len < 24 then
+                return len - 24
+            end
+            local length = buffer(offset + 16, 4):le_uint() + 24
+            local cmd = buffer(offset + 4, 12):stringz()
+            if len < length then
+                return len - length
+            end
+            neop2p_dissector(buffer(offset, length), pinfo, tree)
+            return length
         end
      ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
         local neo = Proto("NEOPROTOCOL", "Neo Protocol")
     
-        -- function neo.dissector(buffer, pinfo, tree)
-        --     local len = buffer:len()
-        --     local offset = 0
-        --     while 0 < len do
-        --         if len < 24 then
-        --             pinfo.desegment_offset = offset
-        --             pinfo.desegment_len = DESEGMENT_ONE_MORE_SEGMENT
-        --             return
-        --         end
-        --         if not neop2p_detector(buffer(offset):tvb(), pinfo, tree) then 
-        --             return 0 
-        --         end
-        --         local length = buffer(offset + 16, 4):le_uint() + 24
-        --         if len < length then
-        --             tw:append(buffer(offset + 4, 12):stringz())
-        --             tw:append("\n")
-        --             local missing = length - len
-        --             pinfo.desegment_offset = offset
-        --             pinfo.desegment_len = missing
-        --             return 
-        --         end
-        --         neop2p_dissector(buffer(offset, length), pinfo, tree)
-        --         len = len - length
-        --         offset = offset + length
-        --     end
-        --     return true
-        -- end
-        local function get_neop2p_len(buffer, pinfo, offset)
-            local len = buffer(offset + 16, 4):le_uint() + 24
-            return len
-        end
         function neo.dissector(buffer, pinfo, tree)
-            if neop2p_detector(buffer, pinfo, tree) then
-                return dissect_tcp_pdus(buffer, tree, 24, get_neop2p_len, neop2p_dissector)
+            local len = buffer:len()
+            local offset = 0
+
+            while offset < len do
+     
+                local result = neop2p_detector(buffer, pinfo, tree, offset)
+
+                if 0 < result  then
+                    offset = offset + result
+                elseif 0 == result then
+                    return 0
+                else 
+                    pinfo.desegment_offset = offset
+                    result = -result
+                    pinfo.desegment_len = result
+                    return len
+                end
             end
-            return false
+            return
         end
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
