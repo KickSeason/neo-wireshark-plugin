@@ -17,6 +17,11 @@ do
     C_GET_DATA      = "getdata"
     C_TX            = "tx"
     C_BLOCK         = "block"
+    C_CONSENSUS     = "consensus"
+    C_MEMPOOL       = "mempool"
+    C_FILTER_CLEAR   = "filterclear"
+    C_FILTER_LOAD    = "filterload"
+    C_FILTER_ADD     = "filteradd"
 
     TX_MINER        = 0x00
     TX_ISSUE        = 0x01
@@ -59,7 +64,12 @@ do
         [C_INV]           = "INV",
         [C_GET_DATA]      = "GETDATA",
         [C_TX]            = "TX",
-        [C_BLOCK]         = "BLOCK"
+        [C_BLOCK]         = "BLOCK",
+        [C_CONSENSUS]     = "CONSENSUS",
+        [C_MEMPOOL]       = "MEMPOOL",
+        [C_FILTER_CLEAR]   = "FILTERCLEAR",
+        [C_FILTER_LOAD]    = "FILTERLOAD",
+        [C_FILTER_ADD]     = "FILTERADD"
     }
     DATA_TYPE = {
         [DATA_TX]           = "Txs",
@@ -128,12 +138,16 @@ do
     ---------------------------------------------------------------------------------------------------
     local neop2p_script = Proto("script", "script")
 
-    neop2p_script.fields.scriptlen = ProtoField.uint8("script.scriptlen", "SCRIPTLEN", base.DEC)
-    neop2p_script.fields.script = ProtoField.string("script.script", "SCRIPT", base.ASCII)
+    neop2p_script.fields.scriptlen = ProtoField.uint8("script.scriptlen", "LEN", base.DEC)
+    neop2p_script.fields.script = ProtoField.string("script.script", "DATA", base.ASCII)
 
+    local function get_script_length(buffer, offset)
+        local slen = buffer(offset, 1):le_uint()
+        return slen + 1
+    end
     local function neop2p_script_dissector(buffer, pinfo, tree, offset, name)
         local scriptlen = buffer(offset, 1):le_uint()
-        local script_tree = tree:add(neop2p_script, buffer(offset, scriptlen + 1), name.."Script")
+        local script_tree = tree:add(neop2p_script, buffer(offset, scriptlen + 1), name)
 
         script_tree:add(neop2p_script.fields.scriptlen, buffer(offset, 1), scriptlen)
         if scriptlen == 0 then
@@ -147,18 +161,48 @@ do
 
     neop2p_scripts.fields.count = ProtoField.uint8("scripts.count", "COUNT", base.DEC)
 
+    local function get_scripts_length(buffer, offset)
+        local len = buffer:len()
+        local index = 0
+        local loffset = 0
+        local count = buffer(offset, 1):le_uint()
+        loffset = loffset + 1
+        while (index < count) do
+            local result = get_script_length(buffer(offset + loffset, len - offset - loffset), offset + loffset)
+            loffset = loffset + result
+        end
+        return loffset
+    end
     local function neop2p_scripts_dissector(buffer, pinfo, tree, offset)
         local index = 0
         local local_offset = 0
         local count = buffer(offset, 1):le_uint()
-        tree:add(neop2p_scripts.fields.count, buffer(offset, 1), count)
+        local scripts_tree = tree:add(neop2p_scripts, buffer(offset, get_scripts_length(buffer, offset)), "SCRIPTS")
+        scripts_tree:add(neop2p_scripts.fields.count, buffer(offset, 1), count)
         local_offset = local_offset + 1
         while (index < count) do
-            local result = neop2p_script_dissector(buffer, pinfo, tree, offset + 1 + index * count, "script")
+            local result = neop2p_script_dissector(buffer, pinfo, scripts_tree, offset + 1 + index * count, "script")
             local_offset = local_offset + result
             index = index + 1
         end
         return local_offset
+    end
+
+    local neop2p_witness = Proto("NeoWitness", "Neo P2P Witness")
+
+    local function get_witness_length(buffer, offset)
+        local len1 = buffer(offset, 1):le_uint()
+        local len2 = buffer(offset + 1 + len1, 1):le_uint()
+        return len1 + len2 + 2
+    end
+    local function neop2p_witness_dissector(buffer, pinfo, tree, offset)
+        local loffset = 0
+        local witness_tree = tree:add(neop2p_witness, buffer(offset, get_witness_length(buffer, offset)), "WITNESS")
+        result = neop2p_script_dissector(buffer, pinfo, witness_tree, offset, "INVOCATIONSCRIPT")
+        loffset = loffset + result
+        result = neop2p_script_dissector(buffer, pinfo, witness_tree, offset + loffset, "VERIFICATIONSCRIPT")
+        loffset = loffset + result
+        return loffset
     end
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
@@ -181,10 +225,10 @@ do
     
     neop2p_coins.fields.count = ProtoField.uint8("coins.count", "COUNT", base.DEC)
 
-    local function neop2p_coins_dissector(buffer, pinfo, tree, offset)
+    local function neop2p_coins_dissector(buffer, pinfo, tree, offset, name)
         local index = 0
         local count = buffer(offset, 1):le_uint()
-        local coins_tree = tree:add(neop2p_coins, buffer(offset, 1 + count * 34), "COINS")
+        local coins_tree = tree:add(neop2p_coins, buffer(offset, 1 + count * 34), name)
         coins_tree:add(neop2p_coins.fields.count, buffer(offset, 1), count)
         while (index < count) do
             local result = neop2p_coin_dissector(buffer, pinfo, coins_tree, offset + 1 + index * count)
@@ -236,6 +280,16 @@ do
     neop2p_attr.fields.length = ProtoField.uint8("attr.length", "LENGTH", base.DEC)
     neop2p_attr.fields.data = ProtoField.string("attr.data", "DATA", base.ASCII)
 
+    local function get_attr_length(buffer, offset)
+        local usage = buffer(offset, 1):le_uint()
+        if usage == ATTR_CONTRACTHASH or usage == ATTR_VOTE or usage == ATTR_ECDH02 
+        or usage == ATTR_ECDH03 or (ATTR_HASH1 <= usage and usage <= ATTR_HASH15) then
+            local length = 32
+            return length + 1
+        end
+        local length = buffer(offset + 1, 1):le_uint()
+        return length + 2
+    end
     local function neop2p_attr_dissector(buffer, pinfo, tree, offset)
         local usage = buffer(offset, 1):le_uint()
         if usage == ATTR_CONTRACTHASH or usage == ATTR_VOTE or usage == ATTR_ECDH02 
@@ -249,7 +303,7 @@ do
         local length = buffer(offset + 1, 1):le_uint()
         local attr_tree = tree:add(neop2p_attr, buffer(offset, 2 + length), "Attribute")
         attr_tree:add(neop2p_attr.fields.usage, buffer(offset, 1), usage)
-        attr_tree:add(neop2p_attr.fields.usage, buffer(offset + 1, 1), length)
+        attr_tree:add(neop2p_attr.fields.length, buffer(offset + 1, 1), length)
         attr_tree:add(neop2p_attr.fields.data, buffer(offset + 2, length), tostring(buffer(offset + 1, length)))
         return length + 2
     end
@@ -258,15 +312,27 @@ do
 
     neop2p_attrs.fields.count = ProtoField.uint8("attrs.count", "COUNT", base.DEC)
 
+    local function get_attrs_length(buffer, offset)
+        local len = buffer:len()
+        local index = 0
+        local loffset = 0
+        local count = buffer(offset, 1):le_uint()
+        loffset = loffset + 1
+        while (index < count) do
+            local result = get_attr_length(buffer(offset + loffset, len - offset - loffset), offset + loffset)
+            loffset = loffset + result
+        end
+        return loffset
+    end
     local function neop2p_attrs_dissector(buffer, pinfo, tree, offset)
         local index = 0
         local local_offset = 0
         local count = buffer(offset, 1):le_uint()
-        -- local attrs_tree = tree:add(neop2p_attrs, buffer(offset + local_offset, count * 60), "Outputs")
-        tree:add(neop2p_outputs.fields.count, buffer(offset + local_offset, 1), count)
+        local attrs_tree = tree:add(neop2p_attrs, buffer(offset + local_offset, get_attrs_length(buffer, offset)), "ATTRIBUTES")
+        attrs_tree:add(neop2p_outputs.fields.count, buffer(offset + local_offset, 1), count)
         local_offset = local_offset + 1
         while (index < count) do
-            local result = neop2p_attr_dissector(buffer, pinfo, tree, offset + local_offset)
+            local result = neop2p_attr_dissector(buffer, pinfo, attrs_tree, offset + local_offset)
             local_offset = local_offset + result
             index = index + 1
         end
@@ -308,7 +374,7 @@ do
             tx_tree:add(neop2p_tx.fields.nonce, buffer(offset, 4), buffer(offset, 4):le_uint())
             offset = offset + 4
         elseif type == TX_CLAIM then
-            local result = neop2p_coins_dissector(buffer, pinfo, tx_tree, offset)
+            local result = neop2p_coins_dissector(buffer, pinfo, tx_tree, offset, "CLAIMS")
             offset = offset + result
         elseif type == TX_INVOCATION then
             local result = neop2p_script_dissector(buffer, pinfo, tx_tree, offset, "Script")
@@ -319,7 +385,7 @@ do
         ----attributes
         local result = neop2p_attrs_dissector(buffer, pinfo, tx_tree, offset)
         offset = offset + result
-        result = neop2p_coins_dissector(buffer, pinfo, tx_tree, offset)
+        result = neop2p_coins_dissector(buffer, pinfo, tx_tree, offset, "INPUTS")
         offset = offset + result
         result = neop2p_outputs_dissector(buffer, pinfo, tx_tree, offset)
         offset = offset + result
@@ -371,7 +437,6 @@ do
         offset = offset + result
         result = neop2p_script_dissector(buffer, pinfo, block_tree, offset, "verify")
         offset = offset + result
-        block_tree:add(neop2p_block.fields.txs, buffer(offset, len - offset), tostring(buffer(offset, len - offset)))
         local txs_count = buffer(offset, 1):le_uint()
         block_tree:add(neop2p_block.fields.txscount, buffer(offset, 1), txs_count)
         offset = offset + 1
@@ -381,6 +446,22 @@ do
             offset = offset + result
             index = index + 1
         end
+    end
+    ---------------------------------------------------------------------------------------------------
+    ---------------------------------------------------------------------------------------------------
+    ---------------------------------------------------------------------------------------------------
+    local neop2p_getblocks = Proto("GetBlocks", "Neo P2P Get Blocks")
+
+    neop2p_getblocks.fields.count = ProtoField.uint8("count", "COUNT", base.DEC)
+    neop2p_getblocks.fields.hash = ProtoField.string("hashstop", "HASHSTOP", base.ASCII)
+
+    local function neop2p_getblocks_dissector(buffer, pinfo, tree)
+        local len = buffer:len()
+        local offset = 0
+        local getblocks_tree = tree:add(neop2p_getblocks, buffer(0, len), "GetBlocks")
+        local result = neop2p_hashes_dissector(buffer, pinfo, getblocks_tree, 0)
+        offset = offset + result
+        getblocks_tree:add(neop2p_getblocks.fields.hash, buffer(offset, 32), tostring(buffer(offset, 32)))
     end
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
@@ -407,6 +488,49 @@ do
         local result = neop2p_hashes_dissector(buffer, pinfo, getheaders_tree, 0)
         offset = offset + result
         getheaders_tree:add(neop2p_getheaders.fields.hash, buffer(offset, 32), tostring(buffer(offset, 32)))
+    end
+    ---------------------------------------------------------------------------------------------------
+    ---------------------------------------------------------------------------------------------------
+    ---------------------------------------------------------------------------------------------------
+    local neop2p_consensus = Proto("Consensus", "Neo P2P Consensus")
+
+    neop2p_consensus.fields.version = ProtoField.uint32("consensus.version", "VERSION", base.DEC)
+    neop2p_consensus.fields.prehash = ProtoField.string("consensus.prehash", "PREHASH", base.ASCII)
+    neop2p_consensus.fields.blockindex = ProtoField.uint32("consensus.blockindex", "BLOCKINDEX", base.DEC)
+    neop2p_consensus.fields.validatorindex = ProtoField.uint16("consensus.validatorindex", "VALIDATORINDEX", base.DEC)
+    neop2p_consensus.fields.timestamp = ProtoField.uint32("consensus.timestamp", "TIMESTAMP", base.DEC)
+    ----data
+    --neop2p_consensus.fields.data = 
+    neop2p_consensus.fields.witnesscount = ProtoField.uint8("consensus.witnesscount", "WITNESSCOUNT", base.DEC)
+    --neop2p_consensus.fields.invocationscript = 
+    --neop2p_consensus.fields.verificationscript = 
+
+    local function neop2p_consensus_dissector(buffer, pinfo, tree)
+        local len = buffer:len()
+        
+        local con_tree = tree:add(neop2p_consensus, buffer(0, len), "Consensus")
+        local offset = 0
+        con_tree:add(neop2p_consensus.fields.version, buffer(offset, 4), buffer(offset, 4):le_uint())
+        offset = offset + 4
+        con_tree:add(neop2p_consensus.fields.prehash, buffer(offset, 32), tostring(buffer(offset, 32)))
+        offset = offset + 32
+        con_tree:add(neop2p_consensus.fields.blockindex, buffer(offset, 4), buffer(offset, 4):le_uint())
+        offset = offset + 4
+        con_tree:add(neop2p_consensus.fields.validatorindex, buffer(offset, 2), buffer(offset, 2):le_uint())
+        offset = offset + 2
+        con_tree:add(neop2p_consensus.fields.timestamp, buffer(offset, 4), buffer(offset, 4):le_uint())
+        offset = offset + 4
+        local result = neop2p_script_dissector(buffer, pinfo, con_tree, offset, "DATA")
+        offset = offset + result
+        local witness_count = buffer(offset, 1):le_uint()
+        con_tree:add(neop2p_consensus.fields.witnesscount, buffer(offset, 1), buffer(offset, 1):le_uint())
+        offset = offset + 1
+        local index = 0
+        while (index < witness_count) do
+            local result = neop2p_witness_dissector(buffer, pinfo, con_tree, offset)
+            offset = offset + result
+            index = index + 1
+        end
     end
     ---------------------------------------------------------------------------------------------------
     ---------------------------------------------------------------------------------------------------
@@ -568,6 +692,14 @@ do
             if cmd == C_BLOCK then
                 neop2p_block_dissector(payload, pinfo, p2p_tree)
                 return true
+            end
+            if cmd == C_GET_BLOCKS then
+                neop2p_getblocks_dissector(payload, pinfo, p2p_tree)
+                return
+            end
+            if cmd == C_CONSENSUS then
+                neop2p_consensus_dissector(payload, pinfo, p2p_tree)
+                return
             end
             p2p_tree:add(neop2p.fields.payload, payload, tostring(payload))
             offset = offset + length
