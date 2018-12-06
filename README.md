@@ -1,5 +1,5 @@
 # neo-wireshark-plugin
-a neo p2p protocol lua plugin for wireshark
+a wireshark lua plugin for neo p2p protocol
 # install
 ## ubuntu 
 *  install wireshark 
